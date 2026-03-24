@@ -3,6 +3,7 @@ import pandas as pd
 import math
 import altair as alt
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import os
 import sqlite3
 from urllib.parse import quote
@@ -127,6 +128,7 @@ def _init_db():
     )
     conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES('total_workers', '5')")
     conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES('base_url', 'http://localhost:8501')")
+    conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES('timezone', 'Asia/Shanghai')")
     conn.commit()
     conn.close()
 
@@ -144,6 +146,36 @@ def _set_setting(key, value):
     conn.execute("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
     conn.commit()
     conn.close()
+
+
+def _tz_name():
+    return _get_setting("timezone", "Asia/Shanghai")
+
+
+def _tz():
+    try:
+        return ZoneInfo(_tz_name())
+    except Exception:
+        return ZoneInfo("Asia/Shanghai")
+
+
+def _now():
+    return datetime.now(_tz())
+
+
+def _parse_dt(dt_str):
+    dt = datetime.fromisoformat(dt_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz())
+    return dt.astimezone(_tz())
+
+
+def _fmt_dt(dt):
+    return dt.astimezone(_tz()).strftime("%H:%M")
+
+
+def _fmt_time(dt):
+    return dt.astimezone(_tz()).strftime("%H:%M")
 
 
 def _list_orders(statuses=None, limit=200):
@@ -233,7 +265,7 @@ def _eta_for_new_order(product, qty, total_workers):
 
     system_cap = float(min(caps)) if len(caps) > 0 else 1.0
     wait_time = (total_wip / (system_cap / 60)) if system_cap > 0 else 0.0
-    now = datetime.now()
+    now = _now()
     eta_ready_at = now + timedelta(minutes=float(wait_time))
     promise_ready_at = now + timedelta(minutes=float(wait_time) * 1.2 + 2)
     return float(wait_time), eta_ready_at, promise_ready_at, float(system_cap), float(avg_complexity)
@@ -241,7 +273,7 @@ def _eta_for_new_order(product, qty, total_workers):
 
 def _create_order(product, ice, sugar, qty, total_workers):
     eta_minutes, eta_ready_at, promise_ready_at, _, _ = _eta_for_new_order(product, qty, total_workers)
-    now = datetime.now()
+    now = _now()
     order_code = f"CHG{now.strftime('%m%d')}{now.strftime('%H%M%S')}{str(now.microsecond)[:3]}"
     conn = _db()
     conn.execute(
@@ -355,8 +387,8 @@ if page == "顾客下单":
         order_code = _create_order(product, ice, sugar, qty, total_workers)
         order = _get_order(order_code)
         st.success(f"下单成功！你的订单号：{order_code}")
-        st.metric("预计取茶时间", datetime.fromisoformat(order["预计取茶时间"]).strftime("%H:%M"))
-        st.metric("建议承诺时间", datetime.fromisoformat(order["建议承诺时间"]).strftime("%H:%M"))
+        st.metric("预计取茶时间", _fmt_dt(_parse_dt(order["预计取茶时间"])), f"{_tz_name()}")
+        st.metric("建议承诺时间", _fmt_dt(_parse_dt(order["建议承诺时间"])), "含安全缓冲")
         col_go1, col_go2 = st.columns(2)
         with col_go1:
             if st.button("去订单查询", use_container_width=True):
@@ -381,8 +413,8 @@ if page == "顾客下单":
         info = _get_order(code.strip())
         if info:
             st.write({k: info[k] for k in ["订单号", "单品", "杯数", "冰度", "甜度", "状态"]})
-            st.write("预计取茶时间：", datetime.fromisoformat(info["预计取茶时间"]).strftime("%H:%M"))
-            st.write("建议承诺时间：", datetime.fromisoformat(info["建议承诺时间"]).strftime("%H:%M"))
+            st.write("预计取茶时间：", _fmt_dt(_parse_dt(info["预计取茶时间"])), f"（{_tz_name()}）")
+            st.write("建议承诺时间：", _fmt_dt(_parse_dt(info["建议承诺时间"])))
         else:
             st.warning("未找到该订单号。")
     st.stop()
@@ -397,8 +429,8 @@ if page == "订单查询":
         info = _get_order(code.strip())
         if info:
             st.write({k: info[k] for k in ["订单号", "单品", "杯数", "冰度", "甜度", "状态"]})
-            st.write("预计取茶时间：", datetime.fromisoformat(info["预计取茶时间"]).strftime("%H:%M"))
-            st.write("建议承诺时间：", datetime.fromisoformat(info["建议承诺时间"]).strftime("%H:%M"))
+            st.write("预计取茶时间：", _fmt_dt(_parse_dt(info["预计取茶时间"])), f"（{_tz_name()}）")
+            st.write("建议承诺时间：", _fmt_dt(_parse_dt(info["建议承诺时间"])))
         else:
             st.warning("未找到该订单号。")
     st.stop()
@@ -550,7 +582,7 @@ st.markdown(f"""
 
 # 2. Operational Metrics
 total_wip, wait_time, system_cap, step_results, allocation = calculate_metrics(total_wip, avg_complexity, total_workers, online_q, offline_q)
-now = datetime.now()
+now = _now()
 eta_ready_time = now + timedelta(minutes=float(wait_time))
 promise_ready_time = now + timedelta(minutes=float(wait_time) * 1.2 + 2)
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -558,13 +590,13 @@ col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
     st.metric("实时排队总量", f"{total_wip} 杯", f"{online_q} 线上 + {offline_q} 线下")
 with col2:
-    st.metric("预计等待时间", f"{wait_time} 分钟", "繁忙" if wait_time > 30 else "正常", delta_color="inverse")
+    st.metric("当前时间", _fmt_time(now), f"{_tz_name()}")
 with col3:
-    st.metric("门店瓶颈产能", f"{system_cap} 杯/小时")
+    st.metric("预计等待时间", f"{wait_time} 分钟", "繁忙" if wait_time > 30 else "正常", delta_color="inverse")
 with col4:
-    st.metric("预计取茶时间", eta_ready_time.strftime("%H:%M"), "ETA（不含缓冲）")
+    st.metric("预计取茶时间", _fmt_dt(eta_ready_time), "ETA（不含缓冲）")
 with col5:
-    st.metric("建议承诺时间", promise_ready_time.strftime("%H:%M"), "含安全缓冲")
+    st.metric("建议承诺时间", _fmt_dt(promise_ready_time), "含安全缓冲")
 
 st.markdown("---")
 
