@@ -285,14 +285,56 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-page = st.sidebar.radio("页面", ["门店看板", "顾客下单", "订单查询", "店员后台"])
+PAGE_OPTIONS = ["门店看板", "顾客下单", "订单查询", "店员后台"]
+PAGE_OPTIONS_CUSTOMER = ["顾客下单", "订单查询"]
+PAGE_PARAM_MAP = {"dashboard": "门店看板", "order": "顾客下单", "query": "订单查询", "staff": "店员后台"}
+
+mode_param = st.query_params.get("mode")
+if isinstance(mode_param, list):
+    mode_param = mode_param[0] if len(mode_param) > 0 else None
+is_customer_mode = str(mode_param).strip().lower() == "customer"
+
+page_param = st.query_params.get("page")
+if isinstance(page_param, list):
+    page_param = page_param[0] if len(page_param) > 0 else None
+if page_param:
+    mapped = PAGE_PARAM_MAP.get(str(page_param).strip().lower())
+    if mapped and (not is_customer_mode or mapped in PAGE_OPTIONS_CUSTOMER):
+        st.session_state["page_select"] = mapped
+
+if "page_select" not in st.session_state:
+    st.session_state["page_select"] = "顾客下单" if is_customer_mode else "门店看板"
+
+if is_customer_mode:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"], [data-testid="collapsedControl"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    page = st.radio(
+        "导航",
+        PAGE_OPTIONS_CUSTOMER,
+        index=PAGE_OPTIONS_CUSTOMER.index(st.session_state["page_select"]),
+        key="page_select",
+        horizontal=True,
+    )
+else:
+    page = st.sidebar.radio(
+        "页面",
+        PAGE_OPTIONS,
+        index=PAGE_OPTIONS.index(st.session_state["page_select"]),
+        key="page_select",
+    )
 
 if page == "顾客下单":
     st.title("🍵 霸王茶姬点单 (模拟)")
     base_url = st.sidebar.text_input("部署后的网页地址", value=_get_setting("base_url", "http://localhost:8501"))
     if base_url:
         _set_setting("base_url", base_url)
-    order_url = base_url.rstrip("/") + "/?page=order"
+    order_url = base_url.rstrip("/") + "/?mode=customer&page=order"
     st.sidebar.markdown(f"点单链接：{order_url}")
     st.sidebar.image(f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(order_url)}")
 
@@ -315,11 +357,26 @@ if page == "顾客下单":
         st.success(f"下单成功！你的订单号：{order_code}")
         st.metric("预计取茶时间", datetime.fromisoformat(order["预计取茶时间"]).strftime("%H:%M"))
         st.metric("建议承诺时间", datetime.fromisoformat(order["建议承诺时间"]).strftime("%H:%M"))
-        st.caption("你可以在“订单查询”页面输入订单号查看状态。")
+        col_go1, col_go2 = st.columns(2)
+        with col_go1:
+            if st.button("去订单查询", use_container_width=True):
+                st.query_params["mode"] = "customer"
+                st.query_params["page"] = "query"
+                st.query_params["order"] = order_code
+                st.rerun()
+        with col_go2:
+            if st.button("继续下单", use_container_width=True):
+                st.query_params["mode"] = "customer"
+                st.query_params["page"] = "order"
+                st.query_params.pop("order", None)
+                st.rerun()
 
     st.markdown("---")
     st.subheader("订单查询（输入订单号）")
-    code = st.text_input("订单号", value="")
+    order_param = st.query_params.get("order")
+    if isinstance(order_param, list):
+        order_param = order_param[0] if len(order_param) > 0 else None
+    code = st.text_input("订单号", value=(order_param or ""))
     if code:
         info = _get_order(code.strip())
         if info:
@@ -332,7 +389,10 @@ if page == "顾客下单":
 
 if page == "订单查询":
     st.title("🔎 订单查询")
-    code = st.text_input("输入订单号", value="")
+    order_param = st.query_params.get("order")
+    if isinstance(order_param, list):
+        order_param = order_param[0] if len(order_param) > 0 else None
+    code = st.text_input("输入订单号", value=(order_param or ""))
     if code:
         info = _get_order(code.strip())
         if info:
@@ -366,7 +426,7 @@ if page == "店员后台":
     st.markdown("---")
     base_url = st.text_input("部署后的网页地址（用于生成二维码）", value=_get_setting("base_url", "http://localhost:8501"))
     _set_setting("base_url", base_url)
-    order_url = base_url.rstrip("/") + "/?page=order"
+    order_url = base_url.rstrip("/") + "/?mode=customer&page=order"
     st.write("顾客点单链接：", order_url)
     st.image(f"https://api.qrserver.com/v1/create-qr-code/?size=220x220&data={quote(order_url)}")
     st.stop()
